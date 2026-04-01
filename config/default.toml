@@ -1,0 +1,62 @@
+# Cripton Configuration
+# Copy to config/local.toml to override defaults
+
+[trading]
+# Base trade amount per cycle (USD)
+trade_amount = 100
+# Paper trading mode
+paper_mode = true
+
+[strategy.triangular]
+# Minimum profit percentage to trigger
+min_profit_pct = 0.03
+# Fee rate per trade (Binance)
+fee_rate = 0.001
+
+[strategy.cross_exchange]
+# Minimum profit percentage to trigger
+min_profit_pct = 0.1
+# Binance fee rate
+fee_rate_a = 0.001
+# Bitso fee rate
+fee_rate_b = 0.006
+
+[risk]
+# Maximum amount per single trade (USD)
+max_trade_amount = 500
+# Maximum total exposure (USD)
+max_total_exposure = 2000
+# Maximum loss before circuit breaker trips (USD)
+max_loss = 50
+# Circuit breaker window (minutes)
+cb_window_minutes = 60
+# Max consecutive losses before trip
+max_consecutive_losses = 5
+# Cooldown after trip (minutes)
+cb_cooldown_minutes = 30
+
+[execution]
+# Maximum slippage tolerance (percentage)
+max_slippage_pct = 0.05
+# Maximum retry attempts for failed orders
+max_retries = 2
+# Use limit orders (true) or market orders (false)
+use_limit_orders = true
+
+[scheduler]
+# Allow trading outside defined windows
+allow_off_window = true
+# Base minimum profit percentage
+base_min_profit_pct = 0.03
+
+[api]
+# API server port
+port = 3001
+
+[redis]
+# Redis URL (leave empty to disable)
+url = ""
+
+[mirofish]
+# MiroFish URL (leave empty to disable)
+url = ""

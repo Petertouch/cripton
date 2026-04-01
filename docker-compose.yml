@@ -1,0 +1,113 @@
+services:
+  # --- Cripton Trading Bot ---
+  bot:
+    build: .
+    container_name: cripton-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://cripton:cripton@postgres:5432/cripton
+      - REDIS_URL=redis://redis:6379
+      - API_PORT=3001
+      - RUST_LOG=info
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cripton
+
+  # --- Dashboard ---
+  dashboard:
+    build: ./dashboard
+    container_name: cripton-dashboard
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3001/api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - bot
+    networks:
+      - cripton
+
+  # --- PostgreSQL ---
+  postgres:
+    image: postgres:17-alpine
+    container_name: cripton-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cripton
+      POSTGRES_PASSWORD: cripton
+      POSTGRES_DB: cripton
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/setup_db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cripton"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cripton
+
+  # --- Redis ---
+  redis:
+    image: redis:7-alpine
+    container_name: cripton-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cripton
+
+  # --- Prometheus ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cripton-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - cripton
+
+  # --- Grafana ---
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cripton-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: cripton
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3002:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - cripton
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  cripton:
+    driver: bridge

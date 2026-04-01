@@ -1,3 +1,4 @@
+mod metrics;
 mod status;
 mod trades;
 
@@ -9,4 +10,5 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(status::routes())
         .merge(trades::routes())
+        .merge(metrics::routes())
 }

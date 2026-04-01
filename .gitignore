@@ -20,6 +20,15 @@ Thumbs.db
 .vscode/
 *.iml
 
+# Config overrides (may contain secrets)
+config/local.toml
+config/production.toml
+
 # Crash dumps that may contain secrets
 core
 *.dmp
+
+# Docker volumes
+postgres_data/
+grafana_data/
+prometheus_data/
