@@ -24,6 +24,15 @@ pub enum Side {
     Sell,
 }
 
+impl fmt::Display for Side {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Side::Buy => write!(f, "BUY"),
+            Side::Sell => write!(f, "SELL"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OrderType {
     Market,

@@ -1,0 +1,14 @@
+[package]
+name = "cripton-strategy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cripton-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+rust_decimal = { workspace = true }
+chrono = { workspace = true }
+async-trait = "0.1"
+rust_decimal_macros = "1.40.0"

@@ -5,6 +5,10 @@ members = [
     "crates/core",
     "crates/exchanges",
     "crates/market_data",
+    "crates/strategy",
+    "crates/execution",
+    "crates/risk",
+    "crates/storage",
 ]
 
 [workspace.package]
@@ -31,6 +35,10 @@ url = "2"
 cripton-core = { path = "crates/core" }
 cripton-exchanges = { path = "crates/exchanges" }
 cripton-market-data = { path = "crates/market_data" }
+cripton-strategy = { path = "crates/strategy" }
+cripton-execution = { path = "crates/execution" }
+cripton-risk = { path = "crates/risk" }
+cripton-storage = { path = "crates/storage" }
 
 [package]
 name = "cripton"
@@ -45,7 +53,13 @@ path = "src/main.rs"
 cripton-core = { workspace = true }
 cripton-exchanges = { workspace = true }
 cripton-market-data = { workspace = true }
+cripton-strategy = { workspace = true }
+cripton-execution = { workspace = true }
+cripton-risk = { workspace = true }
+cripton-storage = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1.40.0"
