@@ -14,6 +14,8 @@ members = [
     "crates/ratelimit",
     "crates/api",
     "crates/alerts",
+    "crates/cache",
+    "crates/mirofish",
 ]
 
 [workspace.package]
@@ -49,6 +51,8 @@ cripton-paper = { path = "crates/paper" }
 cripton-ratelimit = { path = "crates/ratelimit" }
 cripton-api = { path = "crates/api" }
 cripton-alerts = { path = "crates/alerts" }
+cripton-cache = { path = "crates/cache" }
+cripton-mirofish = { path = "crates/mirofish" }
 
 [package]
 name = "cripton"
@@ -72,6 +76,8 @@ cripton-paper = { workspace = true }
 cripton-ratelimit = { workspace = true }
 cripton-api = { workspace = true }
 cripton-alerts = { workspace = true }
+cripton-cache = { workspace = true }
+cripton-mirofish = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
