@@ -39,12 +39,42 @@ MIN_PROFIT_TRIANGULAR = Decimal("0.03")  # 0.03%
 MIN_PROFIT_CROSS = Decimal("0.1")        # 0.1%
 
 
+import time as _time
+
+# SEC: rate limit for Binance API (max ~1200 weight/min, each kline = 1 weight)
+_last_request_time = 0.0
+_REQUEST_INTERVAL = 0.15  # 150ms between requests = ~400 req/min (safe margin)
+
+
+def _rate_limited_get(url: str, params: dict) -> requests.Response:
+    """Make a rate-limited GET request to avoid IP bans."""
+    global _last_request_time
+    elapsed = _time.time() - _last_request_time
+    if elapsed < _REQUEST_INTERVAL:
+        _time.sleep(_REQUEST_INTERVAL - elapsed)
+    _last_request_time = _time.time()
+
+    resp = requests.get(url, params=params, timeout=10)
+    # Check for rate limit response
+    if resp.status_code == 429:
+        wait = int(resp.headers.get("Retry-After", "60"))
+        print(f"  Rate limited! Waiting {wait}s...")
+        _time.sleep(wait)
+        return _rate_limited_get(url, params)  # retry
+    resp.raise_for_status()
+    return resp
+
+
 def fetch_binance_klines(symbol: str, interval: str, days: int) -> pd.DataFrame:
-    """Fetch historical klines from Binance."""
+    """Fetch historical klines from Binance with rate limiting."""
+    # SEC: clamp days to prevent excessive API calls
+    days = max(1, min(days, 365))
+
     end_time = int(datetime.now().timestamp() * 1000)
     start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
 
     all_data = []
+    request_count = 0
     while start_time < end_time:
         params = {
             "symbol": symbol,
@@ -52,8 +82,8 @@ def fetch_binance_klines(symbol: str, interval: str, days: int) -> pd.DataFrame:
             "startTime": start_time,
             "limit": 1000,
         }
-        resp = requests.get(f"{BINANCE_API}/klines", params=params, timeout=10)
-        resp.raise_for_status()
+        resp = _rate_limited_get(f"{BINANCE_API}/klines", params)
+        request_count += 1
         data = resp.json()
         if not data:
             break
@@ -252,7 +282,11 @@ def backtest_cross_exchange(days: int) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Cripton Backtesting Engine")
-    parser.add_argument("--days", type=int, default=7, help="Days of historical data")
+    parser.add_argument(
+        "--days", type=int, default=7,
+        help="Days of historical data (1-365)",
+        choices=range(1, 366), metavar="DAYS",
+    )
     parser.add_argument(
         "--strategy",
         choices=["triangular", "cross_exchange", "all"],

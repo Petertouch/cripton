@@ -60,10 +60,19 @@ impl PaperExchange {
             info!("  {}: {}", asset, amount);
         }
 
+        // SEC: clamp slippage to [0, 0.05] (0-5%) — reject negative or extreme values
+        let clamped_slippage = slippage_rate.max(Decimal::ZERO).min(dec!(0.05));
+        if clamped_slippage != slippage_rate {
+            info!(
+                "Paper: slippage clamped from {} to {}",
+                slippage_rate, clamped_slippage
+            );
+        }
+
         Self {
             real_exchange,
             balances: Arc::new(RwLock::new(initial_balances)),
-            slippage_rate,
+            slippage_rate: clamped_slippage,
             order_counter: AtomicU64::new(1),
             total_pnl: Arc::new(RwLock::new(Decimal::ZERO)),
             trade_log: Arc::new(RwLock::new(Vec::new())),
@@ -75,7 +84,7 @@ impl PaperExchange {
         format!("PAPER-{}", id)
     }
 
-    /// Apply simulated slippage to a price
+    /// Apply simulated slippage to a price (always works against the trader)
     fn apply_slippage(&self, price: Decimal, side: Side) -> Decimal {
         match side {
             Side::Buy => price * (Decimal::ONE + self.slippage_rate),

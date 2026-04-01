@@ -72,29 +72,31 @@ async fn main() -> Result<()> {
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
 
-    // SEC: clients consume credentials via mem::take, then we zeroize local copies
-    let raw_binance: Arc<dyn ExchangeConnector> = Arc::new(BinanceClient::new(
-        std::mem::take(&mut binance_key),
-        std::mem::take(&mut binance_secret),
-    ));
-    let raw_bitso: Arc<dyn ExchangeConnector> = Arc::new(BitsoClient::new(
-        std::mem::take(&mut bitso_key),
-        std::mem::take(&mut bitso_secret),
-    ));
+    // SEC: loud, repeated warning for paper mode
+    if paper_mode {
+        warn!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        warn!("!!!  PAPER TRADING MODE — NO REAL ORDERS  !!!");
+        warn!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    }
+
+    // SEC: build exchange clients and immediately wrap — no raw refs kept
+    let binance_rl: Arc<dyn ExchangeConnector> =
+        Arc::new(RateLimitedExchange::binance(Arc::new(BinanceClient::new(
+            std::mem::take(&mut binance_key),
+            std::mem::take(&mut binance_secret),
+        ))));
+    let bitso_rl: Arc<dyn ExchangeConnector> =
+        Arc::new(RateLimitedExchange::bitso(Arc::new(BitsoClient::new(
+            std::mem::take(&mut bitso_key),
+            std::mem::take(&mut bitso_secret),
+        ))));
     binance_key.zeroize();
     binance_secret.zeroize();
     bitso_key.zeroize();
     bitso_secret.zeroize();
 
-    // Wrap in rate limiters (always active — protects against IP bans)
-    let binance_rl: Arc<dyn ExchangeConnector> =
-        Arc::new(RateLimitedExchange::binance(raw_binance.clone()));
-    let bitso_rl: Arc<dyn ExchangeConnector> =
-        Arc::new(RateLimitedExchange::bitso(raw_bitso.clone()));
-
     // Wrap in paper trading if PAPER_MODE=true
     let (binance, bitso): (Arc<dyn ExchangeConnector>, Arc<dyn ExchangeConnector>) = if paper_mode {
-        info!("*** PAPER TRADING MODE ***");
         let mut binance_bals = std::collections::HashMap::new();
         binance_bals.insert("USDT".to_string(), dec!(1000));
         binance_bals.insert("USDC".to_string(), dec!(1000));
@@ -102,7 +104,7 @@ async fn main() -> Result<()> {
 
         let mut bitso_bals = std::collections::HashMap::new();
         bitso_bals.insert("USDT".to_string(), dec!(1000));
-        bitso_bals.insert("COP".to_string(), dec!(4_200_000)); // ~1000 USDT in COP
+        bitso_bals.insert("COP".to_string(), dec!(4_200_000));
 
         (
             Arc::new(PaperExchange::new(binance_rl, binance_bals, dec!(0.0005))),
@@ -223,7 +225,9 @@ async fn main() -> Result<()> {
     });
 
     info!("All systems online. Entering main trading loop...");
-    if read_only {
+    if paper_mode {
+        warn!("  Mode: PAPER TRADING (simulated fills, no real orders)");
+    } else if read_only {
         info!("  Mode: READ-ONLY");
     } else {
         info!("  Mode: LIVE TRADING");
