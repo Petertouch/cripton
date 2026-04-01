@@ -229,11 +229,13 @@ async fn main() -> Result<()> {
     // --- Telegram Alerts ---
     let telegram = TelegramAlerter::from_env();
 
-    // --- API Server (background) ---
+    // --- API Server (background, supervised) ---
     let api_port: u16 = std::env::var("API_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(3001);
+    // SEC: API requires bearer token when API_TOKEN is set
+    let api_token = std::env::var("API_TOKEN").unwrap_or_default();
 
     let scheduler_arc = Arc::new(scheduler);
     let api_state = AppState {
@@ -243,11 +245,14 @@ async fn main() -> Result<()> {
         storage: storage.clone(),
         paper_mode,
         start_time: chrono::Utc::now(),
+        api_token,
     };
 
+    let telegram_for_api = telegram.clone();
     tokio::spawn(async move {
         if let Err(e) = cripton_api::start_api(api_state, api_port).await {
             error!("API server failed: {}", e);
+            telegram_for_api.alert_error("API server crashed");
         }
     });
 
@@ -260,7 +265,7 @@ async fn main() -> Result<()> {
         "LIVE"
     };
     info!("All systems online. Mode: {}", mode);
-    telegram.alert_startup(mode, 2, strategies.len()).await;
+    telegram.alert_startup(mode, 2, strategies.len());
 
     // --- Main Loop ---
     let mut update_count: u64 = 0;
@@ -287,9 +292,7 @@ async fn main() -> Result<()> {
             let (tripped, window_pnl) = rm.circuit_breaker_status();
             if tripped {
                 warn!("  Circuit breaker: ACTIVE");
-                telegram
-                    .alert_circuit_breaker(&format!("{:.4}", window_pnl))
-                    .await;
+                telegram.alert_circuit_breaker(&format!("{:.4}", window_pnl));
             }
         }
 
@@ -358,14 +361,10 @@ async fn main() -> Result<()> {
                         trades.len(),
                         approved_signals.len()
                     );
-                    telegram
-                        .alert_partial_fill(trades.len(), approved_signals.len())
-                        .await;
+                    telegram.alert_partial_fill(trades.len(), approved_signals.len());
                 }
 
-                telegram
-                    .alert_trade_executed(trades.len(), trades_executed)
-                    .await;
+                telegram.alert_trade_executed(trades.len(), trades_executed);
 
                 info!(
                     "Executed {} trades | total: {}",
@@ -375,7 +374,7 @@ async fn main() -> Result<()> {
             }
             Err(_) => {
                 error!("Execution failed");
-                telegram.alert_error("Execution failed").await;
+                telegram.alert_error("Execution failed");
             }
         }
     }
