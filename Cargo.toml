@@ -10,6 +10,8 @@ members = [
     "crates/risk",
     "crates/storage",
     "crates/scheduler",
+    "crates/paper",
+    "crates/ratelimit",
 ]
 
 [workspace.package]
@@ -41,6 +43,8 @@ cripton-execution = { path = "crates/execution" }
 cripton-risk = { path = "crates/risk" }
 cripton-storage = { path = "crates/storage" }
 cripton-scheduler = { path = "crates/scheduler" }
+cripton-paper = { path = "crates/paper" }
+cripton-ratelimit = { path = "crates/ratelimit" }
 
 [package]
 name = "cripton"
@@ -60,6 +64,8 @@ cripton-execution = { workspace = true }
 cripton-risk = { workspace = true }
 cripton-storage = { workspace = true }
 cripton-scheduler = { workspace = true }
+cripton-paper = { workspace = true }
+cripton-ratelimit = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

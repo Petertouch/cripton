@@ -8,9 +8,11 @@ use tracing_subscriber::EnvFilter;
 use zeroize::Zeroize;
 
 use cripton_core::{Exchange, TradingPair};
-use cripton_exchanges::{BinanceClient, BitsoClient};
+use cripton_exchanges::{BinanceClient, BitsoClient, ExchangeConnector};
 use cripton_execution::{ExecutionConfig, ExecutionEngine};
 use cripton_market_data::Collector;
+use cripton_paper::PaperExchange;
+use cripton_ratelimit::RateLimitedExchange;
 use cripton_risk::{RiskConfig, RiskManager};
 use cripton_scheduler::{Scheduler, SchedulerConfig};
 use cripton_storage::PgStorage;
@@ -66,23 +68,51 @@ async fn main() -> Result<()> {
     };
 
     // --- Exchange connectors ---
+    let paper_mode = std::env::var("PAPER_MODE")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
     // SEC: clients consume credentials via mem::take, then we zeroize local copies
-    let binance: Arc<dyn cripton_exchanges::ExchangeConnector> = Arc::new(BinanceClient::new(
+    let raw_binance: Arc<dyn ExchangeConnector> = Arc::new(BinanceClient::new(
         std::mem::take(&mut binance_key),
         std::mem::take(&mut binance_secret),
     ));
-    let bitso: Arc<dyn cripton_exchanges::ExchangeConnector> = Arc::new(BitsoClient::new(
+    let raw_bitso: Arc<dyn ExchangeConnector> = Arc::new(BitsoClient::new(
         std::mem::take(&mut bitso_key),
         std::mem::take(&mut bitso_secret),
     ));
-    // SEC: zeroize any residual capacity in the now-empty strings
     binance_key.zeroize();
     binance_secret.zeroize();
     bitso_key.zeroize();
     bitso_secret.zeroize();
 
-    let all_exchanges: Vec<Arc<dyn cripton_exchanges::ExchangeConnector>> =
-        vec![binance.clone(), bitso.clone()];
+    // Wrap in rate limiters (always active — protects against IP bans)
+    let binance_rl: Arc<dyn ExchangeConnector> =
+        Arc::new(RateLimitedExchange::binance(raw_binance.clone()));
+    let bitso_rl: Arc<dyn ExchangeConnector> =
+        Arc::new(RateLimitedExchange::bitso(raw_bitso.clone()));
+
+    // Wrap in paper trading if PAPER_MODE=true
+    let (binance, bitso): (Arc<dyn ExchangeConnector>, Arc<dyn ExchangeConnector>) = if paper_mode {
+        info!("*** PAPER TRADING MODE ***");
+        let mut binance_bals = std::collections::HashMap::new();
+        binance_bals.insert("USDT".to_string(), dec!(1000));
+        binance_bals.insert("USDC".to_string(), dec!(1000));
+        binance_bals.insert("EURC".to_string(), dec!(1000));
+
+        let mut bitso_bals = std::collections::HashMap::new();
+        bitso_bals.insert("USDT".to_string(), dec!(1000));
+        bitso_bals.insert("COP".to_string(), dec!(4_200_000)); // ~1000 USDT in COP
+
+        (
+            Arc::new(PaperExchange::new(binance_rl, binance_bals, dec!(0.0005))),
+            Arc::new(PaperExchange::new(bitso_rl, bitso_bals, dec!(0.001))),
+        )
+    } else {
+        (binance_rl, bitso_rl)
+    };
+
+    let all_exchanges: Vec<Arc<dyn ExchangeConnector>> = vec![binance.clone(), bitso.clone()];
 
     // --- Pairs to monitor ---
     let binance_pairs = vec![

@@ -297,6 +297,8 @@ dependencies = [
  "cripton-exchanges",
  "cripton-execution",
  "cripton-market-data",
+ "cripton-paper",
+ "cripton-ratelimit",
  "cripton-risk",
  "cripton-scheduler",
  "cripton-storage",
@@ -371,6 +373,35 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cripton-paper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "cripton-core",
+ "cripton-exchanges",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cripton-ratelimit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cripton-core",
+ "cripton-exchanges",
+ "rust_decimal",
  "tokio",
  "tracing",
 ]

@@ -1,0 +1,13 @@
+[package]
+name = "cripton-ratelimit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cripton-core = { workspace = true }
+cripton-exchanges = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+rust_decimal = { workspace = true }
+async-trait = "0.1"
