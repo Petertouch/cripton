@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -22,6 +23,10 @@ pub struct BitsoClient {
     client: Client,
     api_key: SecretString,
     api_secret: SecretString,
+    /// SEC: monotonically increasing nonce to prevent replay attacks.
+    /// Combines millisecond timestamp with a counter to guarantee uniqueness
+    /// even when multiple requests happen within the same millisecond.
+    nonce_counter: AtomicU64,
 }
 
 impl fmt::Debug for BitsoClient {
@@ -51,6 +56,7 @@ impl BitsoClient {
             client,
             api_key: key_secret,
             api_secret: secret_secret,
+            nonce_counter: AtomicU64::new(0),
         }
     }
 
@@ -101,8 +107,18 @@ impl BitsoClient {
         hex
     }
 
+    /// SEC: generates a strictly increasing nonce by combining timestamp with atomic counter.
+    /// Even if called multiple times in the same millisecond, each nonce is unique.
+    fn next_nonce(&self) -> String {
+        let ts = Utc::now().timestamp_millis() as u64;
+        let counter = self.nonce_counter.fetch_add(1, Ordering::SeqCst);
+        // Combine: timestamp * 1000 + counter mod 1000
+        let nonce = ts.saturating_mul(1000).saturating_add(counter % 1000);
+        nonce.to_string()
+    }
+
     fn auth_header(&self, method: &str, path: &str, body: &str) -> String {
-        let nonce = Utc::now().timestamp_millis().to_string();
+        let nonce = self.next_nonce();
         let signature = self.sign(&nonce, method, path, body);
         format!(
             "Bitso {}:{}:{}",

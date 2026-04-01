@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use cripton_core::{Exchange, MarketState, OrderType, Side, Signal, TradingPair};
 
@@ -56,10 +56,27 @@ impl CrossExchangeArbitrage {
         let book_a = state.get_orderbook(config.exchange_a, config.pair)?;
         let book_b = state.get_orderbook(config.exchange_b, config.pair)?;
 
-        let bid_a = book_a.best_bid()?.price; // sell price on A
-        let ask_a = book_a.best_ask()?.price; // buy price on A
-        let bid_b = book_b.best_bid()?.price; // sell price on B
-        let ask_b = book_b.best_ask()?.price; // buy price on B
+        // SEC: reject stale data — order books older than 5 seconds are unreliable
+        const MAX_STALENESS_MS: i64 = 5_000;
+        if !book_a.is_fresh(MAX_STALENESS_MS) {
+            warn!(
+                "CrossExchange: stale data from {} for {} (skipping)",
+                config.exchange_a, config.pair
+            );
+            return None;
+        }
+        if !book_b.is_fresh(MAX_STALENESS_MS) {
+            warn!(
+                "CrossExchange: stale data from {} for {} (skipping)",
+                config.exchange_b, config.pair
+            );
+            return None;
+        }
+
+        let bid_a = book_a.best_bid()?.price;
+        let ask_a = book_a.best_ask()?.price;
+        let bid_b = book_b.best_bid()?.price;
+        let ask_b = book_b.best_ask()?.price;
 
         if ask_a.is_zero() || ask_b.is_zero() || bid_a.is_zero() || bid_b.is_zero() {
             return None;
@@ -68,23 +85,52 @@ impl CrossExchangeArbitrage {
         let fee_mult_a = Decimal::ONE - self.fee_rate_a;
         let fee_mult_b = Decimal::ONE - self.fee_rate_b;
 
+        // SEC: validate fee multipliers are positive (misconfig could make them zero/negative)
+        if fee_mult_a <= Decimal::ZERO || fee_mult_b <= Decimal::ZERO {
+            warn!(
+                "CrossExchange: invalid fee rates — fee_a={}, fee_b={}",
+                self.fee_rate_a, self.fee_rate_b
+            );
+            return None;
+        }
+
         // Direction 1: Buy on A, Sell on B
-        // Profit = (bid_B * fee_B) - (ask_A * (1/fee_A))
-        // Simplified: buy at ask_A, sell at bid_B, subtract both fees
-        let revenue_sell_b = bid_b.checked_mul(fee_mult_b)?;
-        let cost_buy_a = ask_a.checked_div(fee_mult_a)?;
-        let profit_a_to_b = revenue_sell_b.checked_sub(cost_buy_a)?;
-        let profit_pct_a_to_b = profit_a_to_b
-            .checked_div(cost_buy_a)?
-            .checked_mul(dec!(100))?;
+        let Some(revenue_sell_b) = bid_b.checked_mul(fee_mult_b) else {
+            warn!("CrossExchange: arithmetic overflow in direction 1 revenue");
+            return None;
+        };
+        let Some(cost_buy_a) = ask_a.checked_div(fee_mult_a) else {
+            warn!("CrossExchange: arithmetic overflow in direction 1 cost");
+            return None;
+        };
+        let Some(profit_a_to_b) = revenue_sell_b.checked_sub(cost_buy_a) else {
+            return None;
+        };
+        let Some(profit_pct_a_to_b) = profit_a_to_b
+            .checked_div(cost_buy_a)
+            .and_then(|r| r.checked_mul(dec!(100)))
+        else {
+            return None;
+        };
 
         // Direction 2: Buy on B, Sell on A
-        let revenue_sell_a = bid_a.checked_mul(fee_mult_a)?;
-        let cost_buy_b = ask_b.checked_div(fee_mult_b)?;
-        let profit_b_to_a = revenue_sell_a.checked_sub(cost_buy_b)?;
-        let profit_pct_b_to_a = profit_b_to_a
-            .checked_div(cost_buy_b)?
-            .checked_mul(dec!(100))?;
+        let Some(revenue_sell_a) = bid_a.checked_mul(fee_mult_a) else {
+            warn!("CrossExchange: arithmetic overflow in direction 2 revenue");
+            return None;
+        };
+        let Some(cost_buy_b) = ask_b.checked_div(fee_mult_b) else {
+            warn!("CrossExchange: arithmetic overflow in direction 2 cost");
+            return None;
+        };
+        let Some(profit_b_to_a) = revenue_sell_a.checked_sub(cost_buy_b) else {
+            return None;
+        };
+        let Some(profit_pct_b_to_a) = profit_b_to_a
+            .checked_div(cost_buy_b)
+            .and_then(|r| r.checked_mul(dec!(100)))
+        else {
+            return None;
+        };
 
         debug!(
             "CrossExchange {} | {}->{}: {:.4}% | {}->{}: {:.4}%",

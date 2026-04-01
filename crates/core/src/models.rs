@@ -30,6 +30,13 @@ impl OrderBook {
         self.asks.first()
     }
 
+    /// SEC: check if this order book data is fresh enough for trading.
+    /// Returns false if data is older than max_age_ms milliseconds.
+    pub fn is_fresh(&self, max_age_ms: i64) -> bool {
+        let age = chrono::Utc::now() - self.timestamp;
+        age.num_milliseconds() <= max_age_ms
+    }
+
     /// Spread between best ask and best bid.
     /// Returns None if no valid spread (empty book or crossed book).
     pub fn spread(&self) -> Option<Decimal> {

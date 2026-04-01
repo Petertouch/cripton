@@ -66,3 +66,4 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = "1.40.0"
+zeroize = "1.8.2"

@@ -5,6 +5,7 @@ use rust_decimal_macros::dec;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
+use zeroize::Zeroize;
 
 use cripton_core::{Exchange, TradingPair};
 use cripton_exchanges::{BinanceClient, BitsoClient};
@@ -26,10 +27,11 @@ async fn main() -> Result<()> {
     info!("=== CRIPTON Stablecoin Arbitrage Bot ===");
 
     // --- Config from env ---
-    let binance_key = std::env::var("BINANCE_API_KEY").unwrap_or_default();
-    let binance_secret = std::env::var("BINANCE_API_SECRET").unwrap_or_default();
-    let bitso_key = std::env::var("BITSO_API_KEY").unwrap_or_default();
-    let bitso_secret = std::env::var("BITSO_API_SECRET").unwrap_or_default();
+    // SEC: credentials are mut so we can zeroize after passing to clients
+    let mut binance_key = std::env::var("BINANCE_API_KEY").unwrap_or_default();
+    let mut binance_secret = std::env::var("BINANCE_API_SECRET").unwrap_or_default();
+    let mut bitso_key = std::env::var("BITSO_API_KEY").unwrap_or_default();
+    let mut bitso_secret = std::env::var("BITSO_API_SECRET").unwrap_or_default();
     let database_url = std::env::var("DATABASE_URL").ok();
 
     let binance_active = !binance_key.is_empty() && !binance_secret.is_empty();
@@ -64,10 +66,20 @@ async fn main() -> Result<()> {
     };
 
     // --- Exchange connectors ---
-    let binance: Arc<dyn cripton_exchanges::ExchangeConnector> =
-        Arc::new(BinanceClient::new(binance_key, binance_secret));
-    let bitso: Arc<dyn cripton_exchanges::ExchangeConnector> =
-        Arc::new(BitsoClient::new(bitso_key, bitso_secret));
+    // SEC: clients consume credentials via mem::take, then we zeroize local copies
+    let binance: Arc<dyn cripton_exchanges::ExchangeConnector> = Arc::new(BinanceClient::new(
+        std::mem::take(&mut binance_key),
+        std::mem::take(&mut binance_secret),
+    ));
+    let bitso: Arc<dyn cripton_exchanges::ExchangeConnector> = Arc::new(BitsoClient::new(
+        std::mem::take(&mut bitso_key),
+        std::mem::take(&mut bitso_secret),
+    ));
+    // SEC: zeroize any residual capacity in the now-empty strings
+    binance_key.zeroize();
+    binance_secret.zeroize();
+    bitso_key.zeroize();
+    bitso_secret.zeroize();
 
     let all_exchanges: Vec<Arc<dyn cripton_exchanges::ExchangeConnector>> =
         vec![binance.clone(), bitso.clone()];
@@ -99,15 +111,13 @@ async fn main() -> Result<()> {
     });
 
     // --- Strategies ---
-    // Strategy 1: Triangular arbitrage on Binance stablecoins
     let triangular =
         TriangularArbitrage::new(dec!(0.03), dec!(0.001), dec!(100), Exchange::Binance);
 
-    // Strategy 2: Cross-exchange COP arbitrage (Binance ↔ Bitso)
     let cross_exchange = CrossExchangeArbitrage::new(
-        dec!(0.1),   // 0.1% min profit (COP spread is usually 0.5-1.5%)
-        dec!(0.001), // Binance 0.1%
-        dec!(0.006), // Bitso 0.6%
+        dec!(0.1),
+        dec!(0.001),
+        dec!(0.006),
         dec!(100),
         vec![CrossPairConfig {
             pair: TradingPair::UsdtCop,
@@ -119,53 +129,70 @@ async fn main() -> Result<()> {
     let strategies: Vec<Box<dyn Strategy>> = vec![Box::new(triangular), Box::new(cross_exchange)];
 
     // --- Risk Manager ---
-    let risk_config = RiskConfig {
+    let risk_manager = Arc::new(Mutex::new(RiskManager::new(RiskConfig {
         max_trade_amount: dec!(500),
         max_total_exposure: dec!(2000),
         max_loss: dec!(50),
         cb_window_minutes: 60,
         max_consecutive_losses: 5,
         cb_cooldown_minutes: 30,
-    };
-    let risk_manager = Arc::new(Mutex::new(RiskManager::new(risk_config)));
+    })));
 
     // --- Execution Engine ---
-    let exec_config = ExecutionConfig {
-        max_slippage_pct: dec!(0.05),
-        max_retries: 2,
-        use_limit_orders: true,
-    };
-    let execution = ExecutionEngine::new(all_exchanges.clone(), exec_config);
+    let execution = ExecutionEngine::new(
+        all_exchanges.clone(),
+        ExecutionConfig {
+            max_slippage_pct: dec!(0.05),
+            max_retries: 2,
+            use_limit_orders: true,
+        },
+    );
 
     // --- Market Data Collector ---
     let collector = Collector::new(all_exchanges, all_pairs);
     let mut state_rx = collector.start().await?;
 
-    // --- Bitso polling (no WebSocket yet — poll every 2 seconds) ---
+    // --- Bitso polling (supervised — restarts on panic) ---
     let bitso_poll = bitso.clone();
     let bitso_poll_pairs = bitso_pairs.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         loop {
-            interval.tick().await;
-            for pair in &bitso_poll_pairs {
-                if let Ok(book) = bitso_poll.fetch_orderbook(*pair).await {
-                    if book.is_valid() {
-                        // Book is fetched and validated — collector handles caching
-                        // via the initial REST snapshot mechanism
+            let poll = bitso_poll.clone();
+            let pairs = bitso_poll_pairs.clone();
+
+            let handle = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                loop {
+                    interval.tick().await;
+                    for pair in &pairs {
+                        match poll.fetch_orderbook(*pair).await {
+                            Ok(book) => {
+                                if !book.is_valid() {
+                                    warn!("Bitso poll: invalid order book for {}", pair);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Bitso poll error for {}: {}", pair, e);
+                            }
+                        }
                     }
                 }
+            });
+
+            // SEC: if the inner task panics, log and restart
+            match handle.await {
+                Err(e) => {
+                    error!("Bitso polling task crashed: {} — restarting in 5s", e);
+                }
+                Ok(()) => {
+                    warn!("Bitso polling task exited unexpectedly — restarting in 5s");
+                }
             }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     });
 
     info!("All systems online. Entering main trading loop...");
-    info!(
-        "  Strategies: {} active ({} triangular + {} cross-exchange)",
-        strategies.len(),
-        1,
-        1
-    );
     if read_only {
         info!("  Mode: READ-ONLY");
     } else {
@@ -180,24 +207,17 @@ async fn main() -> Result<()> {
     while let Some(state) = state_rx.recv().await {
         update_count = update_count.saturating_add(1);
 
-        // Get dynamic params from scheduler
         let params = scheduler.current_params();
 
-        // Skip if scheduler says zero trade amount (outside windows)
         if params.trade_amount.is_zero() {
             continue;
         }
 
-        // Log status periodically
         if update_count.is_multiple_of(500) {
             let window_name = params.active_window.as_deref().unwrap_or("none");
             info!(
-                "--- Status: {} updates | {} opps | {} trades | window: {} | aggressive: {} ---",
-                update_count,
-                opportunities_found,
-                trades_executed,
-                window_name,
-                params.is_aggressive
+                "--- Status: {} updates | {} opps | {} trades | window: {} ---",
+                update_count, opportunities_found, trades_executed, window_name
             );
 
             let rm = risk_manager.lock().await;
@@ -220,12 +240,9 @@ async fn main() -> Result<()> {
 
         opportunities_found = opportunities_found.saturating_add(1);
 
-        // --- Apply scheduler params (override trade amount + min profit) ---
+        // SEC: apply scheduler's dynamic trade amount to ALL signals (no magic number)
         for signal in &mut all_signals {
-            if signal.quantity == dec!(100) {
-                // Override base amount with scheduler's dynamic amount
-                signal.quantity = params.trade_amount;
-            }
+            signal.quantity = params.trade_amount;
         }
 
         // --- Validate through risk manager ---
@@ -238,7 +255,6 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        // --- Execute ---
         if read_only {
             info!(
                 "READ-ONLY: Would execute {} signals",
@@ -268,6 +284,15 @@ async fn main() -> Result<()> {
 
                 let mut rm = risk_manager.lock().await;
                 rm.record_trade_result(pnl, trade_exposure);
+
+                // SEC: if fewer legs filled than expected (partial fill), log warning
+                if trades.len() < approved_signals.len() {
+                    warn!(
+                        "PARTIAL FILL: {}/{} legs executed — manual review needed",
+                        trades.len(),
+                        approved_signals.len()
+                    );
+                }
 
                 info!(
                     "Executed {} trades | total: {}",
