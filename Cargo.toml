@@ -12,6 +12,8 @@ members = [
     "crates/scheduler",
     "crates/paper",
     "crates/ratelimit",
+    "crates/api",
+    "crates/alerts",
 ]
 
 [workspace.package]
@@ -45,6 +47,8 @@ cripton-storage = { path = "crates/storage" }
 cripton-scheduler = { path = "crates/scheduler" }
 cripton-paper = { path = "crates/paper" }
 cripton-ratelimit = { path = "crates/ratelimit" }
+cripton-api = { path = "crates/api" }
+cripton-alerts = { path = "crates/alerts" }
 
 [package]
 name = "cripton"
@@ -66,6 +70,8 @@ cripton-storage = { workspace = true }
 cripton-scheduler = { workspace = true }
 cripton-paper = { workspace = true }
 cripton-ratelimit = { workspace = true }
+cripton-api = { workspace = true }
+cripton-alerts = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -73,3 +79,4 @@ anyhow = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = "1.40.0"
 zeroize = "1.8.2"
+chrono = { workspace = true }

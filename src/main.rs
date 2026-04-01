@@ -7,6 +7,8 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use zeroize::Zeroize;
 
+use cripton_alerts::TelegramAlerter;
+use cripton_api::server::AppState;
 use cripton_core::{Exchange, TradingPair};
 use cripton_exchanges::{BinanceClient, BitsoClient, ExchangeConnector};
 use cripton_execution::{ExecutionConfig, ExecutionEngine};
@@ -224,14 +226,41 @@ async fn main() -> Result<()> {
         }
     });
 
-    info!("All systems online. Entering main trading loop...");
-    if paper_mode {
-        warn!("  Mode: PAPER TRADING (simulated fills, no real orders)");
+    // --- Telegram Alerts ---
+    let telegram = TelegramAlerter::from_env();
+
+    // --- API Server (background) ---
+    let api_port: u16 = std::env::var("API_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3001);
+
+    let scheduler_arc = Arc::new(scheduler);
+    let api_state = AppState {
+        risk_manager: risk_manager.clone(),
+        order_manager: execution.order_manager(),
+        scheduler: scheduler_arc.clone(),
+        storage: storage.clone(),
+        paper_mode,
+        start_time: chrono::Utc::now(),
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = cripton_api::start_api(api_state, api_port).await {
+            error!("API server failed: {}", e);
+        }
+    });
+
+    // --- Startup notifications ---
+    let mode = if paper_mode {
+        "PAPER"
     } else if read_only {
-        info!("  Mode: READ-ONLY");
+        "READ-ONLY"
     } else {
-        info!("  Mode: LIVE TRADING");
-    }
+        "LIVE"
+    };
+    info!("All systems online. Mode: {}", mode);
+    telegram.alert_startup(mode, 2, strategies.len()).await;
 
     // --- Main Loop ---
     let mut update_count: u64 = 0;
@@ -241,7 +270,7 @@ async fn main() -> Result<()> {
     while let Some(state) = state_rx.recv().await {
         update_count = update_count.saturating_add(1);
 
-        let params = scheduler.current_params();
+        let params = scheduler_arc.current_params();
 
         if params.trade_amount.is_zero() {
             continue;
@@ -255,9 +284,12 @@ async fn main() -> Result<()> {
             );
 
             let rm = risk_manager.lock().await;
-            let (tripped, _) = rm.circuit_breaker_status();
+            let (tripped, window_pnl) = rm.circuit_breaker_status();
             if tripped {
                 warn!("  Circuit breaker: ACTIVE");
+                telegram
+                    .alert_circuit_breaker(&format!("{:.4}", window_pnl))
+                    .await;
             }
         }
 
@@ -319,14 +351,21 @@ async fn main() -> Result<()> {
                 let mut rm = risk_manager.lock().await;
                 rm.record_trade_result(pnl, trade_exposure);
 
-                // SEC: if fewer legs filled than expected (partial fill), log warning
+                // SEC: if fewer legs filled than expected (partial fill), alert
                 if trades.len() < approved_signals.len() {
                     warn!(
                         "PARTIAL FILL: {}/{} legs executed — manual review needed",
                         trades.len(),
                         approved_signals.len()
                     );
+                    telegram
+                        .alert_partial_fill(trades.len(), approved_signals.len())
+                        .await;
                 }
+
+                telegram
+                    .alert_trade_executed(trades.len(), trades_executed)
+                    .await;
 
                 info!(
                     "Executed {} trades | total: {}",
@@ -336,6 +375,7 @@ async fn main() -> Result<()> {
             }
             Err(_) => {
                 error!("Execution failed");
+                telegram.alert_error("Execution failed").await;
             }
         }
     }
