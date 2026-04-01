@@ -108,13 +108,26 @@ impl TriangularArbitrage {
 
         for (i, (_pair, side)) in triangle.legs.iter().enumerate() {
             amount = match side {
-                Side::Buy => (amount / prices[i]) * fee_multiplier,
-                Side::Sell => (amount * prices[i]) * fee_multiplier,
+                Side::Buy => {
+                    // SEC: safe division — prices[i] already validated non-zero above,
+                    // but use checked_div as defense-in-depth
+                    let divided = amount.checked_div(prices[i])?;
+                    divided.checked_mul(fee_multiplier)?
+                }
+                Side::Sell => {
+                    let multiplied = amount.checked_mul(prices[i])?;
+                    multiplied.checked_mul(fee_multiplier)?
+                }
             };
+
+            // SEC: if amount becomes zero or negative, abort
+            if amount <= Decimal::ZERO {
+                return None;
+            }
         }
 
         // Profit = final amount - initial amount (1)
-        let profit_pct = (amount - Decimal::ONE) * dec!(100);
+        let profit_pct = (amount - Decimal::ONE).checked_mul(dec!(100))?;
 
         Some((profit_pct, prices))
     }

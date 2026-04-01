@@ -16,11 +16,9 @@ pub enum CriptonError {
     #[error("Order rejected: {0}")]
     OrderRejected(String),
 
-    #[error("Insufficient balance: have {available}, need {required}")]
-    InsufficientBalance {
-        available: String,
-        required: String,
-    },
+    // SEC: do not expose exact balance amounts in error messages
+    #[error("Insufficient balance for requested operation")]
+    InsufficientBalance,
 
     #[error("Rate limited by {exchange}, retry after {retry_after_ms}ms")]
     RateLimited {
@@ -37,10 +35,10 @@ pub enum CriptonError {
         pair: String,
     },
 
-    #[error(transparent)]
+    #[error("HTTP request failed")]
     Http(#[from] reqwest::Error),
 
-    #[error(transparent)]
+    #[error("JSON parsing failed")]
     SerdeJson(#[from] serde_json::Error),
 
     #[error(transparent)]

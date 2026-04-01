@@ -18,3 +18,5 @@ rust_decimal = { workspace = true }
 chrono = { workspace = true }
 async-trait = "0.1.89"
 hmac-sha256 = "1.1.14"
+secrecy = "0.10.3"
+zeroize = "1.8.2"

@@ -6,7 +6,7 @@ use rust_decimal_macros::dec;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use cripton_core::{MarketState, OrderStatus, OrderType, Signal, Trade};
+use cripton_core::{MarketState, OrderStatus, Signal, Trade};
 use cripton_exchanges::ExchangeConnector;
 
 use crate::order_manager::OrderManager;
@@ -52,7 +52,6 @@ impl ExecutionEngine {
         }
     }
 
-    /// Get a reference to the order manager
     pub fn order_manager(&self) -> Arc<Mutex<OrderManager>> {
         self.order_manager.clone()
     }
@@ -77,35 +76,42 @@ impl ExecutionEngine {
         let mut trades = Vec::new();
 
         for (i, signal) in signals.iter().enumerate() {
+            // SEC: reject zero-quantity legs — don't silently skip
+            if signal.quantity.is_zero() {
+                if i > 0 {
+                    warn!("Leg {} has zero quantity — aborting remaining legs to prevent imbalance", i + 1);
+                } else {
+                    warn!("Leg 1 has zero quantity — skipping entire batch");
+                }
+                break;
+            }
+
+            // SEC: reject negative quantities
+            if signal.quantity < Decimal::ZERO {
+                error!("Leg {} has negative quantity — aborting", i + 1);
+                break;
+            }
+
             info!(
                 "  Leg {}: {} {} {} @ {:?} qty={}",
                 i + 1, signal.side, signal.pair, signal.exchange,
                 signal.price, signal.quantity
             );
 
-            // Skip legs with zero quantity (will be calculated from previous fill)
-            if signal.quantity.is_zero() && i > 0 {
-                // In a real implementation, we'd calculate quantity from the
-                // previous leg's fill. For now, log and skip.
-                warn!("  Leg {} has zero quantity — needs fill from leg {}", i + 1, i);
-                continue;
-            }
-
             let exchange = match self.get_exchange(signal.exchange) {
                 Some(e) => e,
                 None => {
-                    error!("Exchange {} not configured", signal.exchange);
-                    continue;
+                    error!("Exchange {:?} not configured — aborting", signal.exchange);
+                    break;
                 }
             };
 
-            // Create local order
-            let order = {
-                let mut mgr = self.order_manager.lock().await;
-                mgr.create_order(signal)
-            };
+            // SEC: hold lock for entire create → submit → update cycle (atomic)
+            let mut mgr = self.order_manager.lock().await;
+            let order = mgr.create_order(signal);
+            let local_id = order.local_id.clone();
 
-            // Place order on exchange
+            // Place order on exchange (lock still held to prevent TOCTOU)
             let result = if self.config.use_limit_orders {
                 if let Some(price) = signal.price {
                     let limit_price = slippage::apply_slippage(
@@ -130,9 +136,9 @@ impl ExecutionEngine {
             match result {
                 Ok(exchange_order_id) => {
                     info!("  Order placed: exchange_id={}", exchange_order_id);
-                    let mut mgr = self.order_manager.lock().await;
-                    mgr.set_exchange_id(&order.id, &exchange_order_id);
-                    mgr.update_status(&exchange_order_id, OrderStatus::Filled);
+                    mgr.set_exchange_id(&local_id, &exchange_order_id);
+                    mgr.update_status(&local_id, OrderStatus::Filled);
+                    drop(mgr); // release lock before building trade
 
                     trades.push(Trade {
                         id: uuid::Uuid::new_v4().to_string(),
@@ -149,10 +155,9 @@ impl ExecutionEngine {
                 }
                 Err(e) => {
                     error!("  Order FAILED: {}", e);
-                    let mut mgr = self.order_manager.lock().await;
-                    mgr.update_status(&order.id, OrderStatus::Rejected);
+                    mgr.update_status(&local_id, OrderStatus::Rejected);
+                    drop(mgr);
 
-                    // For triangular arb, if one leg fails we should stop
                     warn!("  Aborting remaining legs due to failure");
                     break;
                 }

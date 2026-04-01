@@ -30,27 +30,66 @@ impl OrderBook {
         self.asks.first()
     }
 
-    /// Spread between best ask and best bid
+    /// Spread between best ask and best bid.
+    /// Returns None if no valid spread (empty book or crossed book).
     pub fn spread(&self) -> Option<Decimal> {
         match (self.best_ask(), self.best_bid()) {
-            (Some(ask), Some(bid)) => Some(ask.price - bid.price),
+            (Some(ask), Some(bid)) if ask.price > bid.price => Some(ask.price - bid.price),
             _ => None,
         }
     }
 
-    /// Spread as a percentage of the mid price
+    /// Spread as a percentage of the mid price.
+    /// Returns None for invalid or crossed order books.
     pub fn spread_pct(&self) -> Option<Decimal> {
         match (self.best_ask(), self.best_bid()) {
-            (Some(ask), Some(bid)) => {
-                let mid = (ask.price + bid.price) / Decimal::TWO;
+            (Some(ask), Some(bid)) if ask.price > bid.price => {
+                let mid = (ask.price + bid.price).checked_div(Decimal::TWO)?;
                 if mid.is_zero() {
                     None
                 } else {
-                    Some((ask.price - bid.price) / mid * Decimal::ONE_HUNDRED)
+                    (ask.price - bid.price)
+                        .checked_div(mid)?
+                        .checked_mul(Decimal::ONE_HUNDRED)
                 }
             }
             _ => None,
         }
+    }
+
+    /// Check if this order book contains valid, non-corrupted data
+    pub fn is_valid(&self) -> bool {
+        if self.bids.is_empty() || self.asks.is_empty() {
+            return false;
+        }
+
+        // All prices and quantities must be positive
+        let all_positive = self
+            .bids
+            .iter()
+            .chain(self.asks.iter())
+            .all(|pl| pl.price > Decimal::ZERO && pl.quantity >= Decimal::ZERO);
+
+        if !all_positive {
+            return false;
+        }
+
+        // Bids descending, asks ascending
+        let bids_sorted = self.bids.windows(2).all(|w| w[0].price >= w[1].price);
+        let asks_sorted = self.asks.windows(2).all(|w| w[0].price <= w[1].price);
+
+        if !bids_sorted || !asks_sorted {
+            return false;
+        }
+
+        // Not crossed
+        if let (Some(bid), Some(ask)) = (self.best_bid(), self.best_ask()) {
+            if bid.price >= ask.price {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -69,7 +108,10 @@ pub struct Ticker {
 /// An order to be placed on an exchange
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
-    pub id: String,
+    /// Internal tracking ID (UUID, never changes)
+    pub local_id: String,
+    /// Exchange-assigned order ID (set after submission)
+    pub exchange_id: Option<String>,
     pub exchange: Exchange,
     pub pair: TradingPair,
     pub side: Side,

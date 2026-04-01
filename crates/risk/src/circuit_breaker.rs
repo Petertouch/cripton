@@ -53,7 +53,8 @@ impl CircuitBreaker {
         self.prune_old_entries(now);
 
         if pnl < Decimal::ZERO {
-            self.consecutive_losses += 1;
+            // SEC: use saturating_add to prevent integer overflow
+            self.consecutive_losses = self.consecutive_losses.saturating_add(1);
         } else {
             self.consecutive_losses = 0;
         }
@@ -71,13 +72,17 @@ impl CircuitBreaker {
             return true;
         };
 
-        // Check if cooldown has passed
+        // SEC: check cooldown with monotonic-safe comparison
+        // If clock goes backward, now < tripped_at, we stay tripped (safe default)
         let now = Utc::now();
-        if now - tripped_at >= self.cooldown {
-            warn!("Circuit breaker cooldown expired, resuming trading");
-            self.reset();
-            return true;
+        if now > tripped_at {
+            if now - tripped_at >= self.cooldown {
+                warn!("Circuit breaker cooldown expired, resuming trading");
+                self.reset();
+                return true;
+            }
         }
+        // If now <= tripped_at (clock skew), remain tripped (fail-safe)
 
         false
     }

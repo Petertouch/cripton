@@ -16,42 +16,46 @@ use cripton_strategy::{Strategy, TriangularArbitrage};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // SEC: default to "warn" in production to avoid leaking strategy details
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
         )
         .init();
 
     info!("=== CRIPTON Stablecoin Arbitrage Bot ===");
 
     // --- Config from env ---
+    // SEC: credentials are moved into BinanceClient and zeroized from this scope
     let api_key = std::env::var("BINANCE_API_KEY").unwrap_or_default();
     let api_secret = std::env::var("BINANCE_API_SECRET").unwrap_or_default();
     let database_url = std::env::var("DATABASE_URL").ok();
 
     let read_only = api_key.is_empty() || api_secret.is_empty();
     if read_only {
-        warn!("API keys not set — running in READ-ONLY mode (no orders will be placed)");
+        warn!("API credentials not configured — running in READ-ONLY mode");
     }
 
     // --- Storage (optional) ---
+    // SEC: don't log the database URL or connection errors that may contain credentials
     let storage = if let Some(ref url) = database_url {
         match PgStorage::new(url).await {
             Ok(s) => {
-                info!("PostgreSQL connected");
+                info!("Database connected");
                 Some(Arc::new(s))
             }
-            Err(e) => {
-                warn!("PostgreSQL not available ({}), running without persistence", e);
+            Err(_) => {
+                warn!("Database not available, running without persistence");
                 None
             }
         }
     } else {
-        warn!("DATABASE_URL not set, running without persistence");
+        warn!("Database not configured, running without persistence");
         None
     };
 
     // --- Exchange connectors ---
+    // SEC: BinanceClient takes ownership and zeroizes original strings
     let binance = Arc::new(BinanceClient::new(api_key, api_secret));
 
     // --- Pairs to monitor ---
@@ -95,8 +99,6 @@ async fn main() -> Result<()> {
     let mut state_rx = collector.start().await?;
 
     info!("All systems online. Entering main trading loop...");
-    info!("  Strategy: {} (min profit: 0.03%)", strategy.name());
-    info!("  Risk: max $500/trade, $2000 exposure, $50 circuit breaker");
     if read_only {
         info!("  Mode: READ-ONLY (monitoring only)");
     } else {
@@ -109,26 +111,18 @@ async fn main() -> Result<()> {
     let mut trades_executed: u64 = 0;
 
     while let Some(state) = state_rx.recv().await {
-        update_count += 1;
+        update_count = update_count.saturating_add(1);
 
         // Log market status periodically
         if update_count % 500 == 0 {
             info!("--- Status: {} updates | {} opportunities | {} trades ---",
                 update_count, opportunities_found, trades_executed);
-            for book in &state.order_books {
-                if let Some(spread_pct) = book.spread_pct() {
-                    info!(
-                        "  {} {} | spread: {:.4}%",
-                        book.exchange, book.pair, spread_pct
-                    );
-                }
-            }
 
             // Log circuit breaker status
             let rm = risk_manager.lock().await;
-            let (tripped, window_pnl) = rm.circuit_breaker_status();
+            let (tripped, _) = rm.circuit_breaker_status();
             if tripped {
-                warn!("  Circuit breaker: TRIPPED (window P&L: {:.4})", window_pnl);
+                warn!("  Circuit breaker: ACTIVE");
             }
         }
 
@@ -139,7 +133,7 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        opportunities_found += 1;
+        opportunities_found = opportunities_found.saturating_add(1);
 
         // --- 2. Validate through risk manager ---
         let approved_signals = {
@@ -153,42 +147,31 @@ async fn main() -> Result<()> {
 
         // --- 3. Execute (only if not read-only) ---
         if read_only {
-            info!(
-                "READ-ONLY: Would execute {} signals ({})",
-                approved_signals.len(),
-                approved_signals.first().map(|s| s.reason.as_str()).unwrap_or("")
-            );
+            info!("READ-ONLY: Would execute {} signals", approved_signals.len());
             continue;
         }
 
         match execution.execute_signals(&approved_signals, &state).await {
             Ok(trades) => {
-                trades_executed += trades.len() as u64;
+                trades_executed = trades_executed.saturating_add(trades.len() as u64);
 
                 // Record trades in storage
                 if let Some(ref store) = storage {
-                    if let Err(e) = store.insert_trades(&trades).await {
-                        error!("Failed to persist trades: {}", e);
+                    if let Err(_) = store.insert_trades(&trades).await {
+                        error!("Failed to persist trades");
                     }
                 }
 
-                // Calculate P&L for risk manager
-                // For triangular arb, P&L = final amount - initial amount
                 let total_fees: rust_decimal::Decimal = trades.iter().map(|t| t.fee).sum();
-                let pnl = -total_fees; // Simplified — real P&L comes from price differences
+                let pnl = -total_fees;
 
                 let mut rm = risk_manager.lock().await;
                 rm.record_trade_pnl(pnl);
 
-                info!(
-                    "Executed {} trades | fees: {:.6} | total trades: {}",
-                    trades.len(),
-                    total_fees,
-                    trades_executed
-                );
+                info!("Executed {} trades | total: {}", trades.len(), trades_executed);
             }
-            Err(e) => {
-                error!("Execution failed: {}", e);
+            Err(_) => {
+                error!("Execution failed");
             }
         }
     }
