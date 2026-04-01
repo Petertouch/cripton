@@ -1,0 +1,12 @@
+[package]
+name = "cripton-scheduler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cripton-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1.40"

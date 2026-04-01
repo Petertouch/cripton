@@ -298,6 +298,7 @@ dependencies = [
  "cripton-execution",
  "cripton-market-data",
  "cripton-risk",
+ "cripton-scheduler",
  "cripton-storage",
  "cripton-strategy",
  "rust_decimal",
@@ -378,6 +379,18 @@ name = "cripton-risk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "cripton-core",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cripton-scheduler"
+version = "0.1.0"
+dependencies = [
  "chrono",
  "cripton-core",
  "rust_decimal",
