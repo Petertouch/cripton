@@ -1,5 +1,25 @@
 /target
+
+# SEC: block ALL env file variants to prevent credential leaks
 .env
+.env.*
+!.env.example
+
+# Editor files
 *.swp
 *.swo
+*.bak
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Crash dumps that may contain secrets
+core
+*.dmp

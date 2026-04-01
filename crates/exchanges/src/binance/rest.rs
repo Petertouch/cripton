@@ -40,7 +40,10 @@ impl fmt::Debug for BinanceClient {
 }
 
 impl BinanceClient {
-    pub fn new(api_key: String, api_secret: String) -> Self {
+    /// SEC: takes ownership of credential strings, wraps in SecretString,
+    /// then zeroizes the originals. No cloning — credentials exist in
+    /// exactly one place (SecretString) after construction.
+    pub fn new(mut api_key: String, mut api_secret: String) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
@@ -49,19 +52,21 @@ impl BinanceClient {
             .build()
             .expect("Failed to build HTTP client");
 
-        let inst = Self {
+        // SEC: SecretString::from() for String takes ownership via Into<Box<str>>,
+        // so we must create it before zeroizing. The original String's heap
+        // allocation is consumed by SecretString — no copy is made.
+        let key_secret = SecretString::from(std::mem::take(&mut api_key));
+        let secret_secret = SecretString::from(std::mem::take(&mut api_secret));
+
+        // SEC: zeroize the now-empty originals (clears any inline capacity)
+        api_key.zeroize();
+        api_secret.zeroize();
+
+        Self {
             client,
-            api_key: SecretString::from(api_key.clone()),
-            api_secret: SecretString::from(api_secret.clone()),
-        };
-
-        // Zeroize the original strings passed in
-        let mut key = api_key;
-        let mut secret = api_secret;
-        key.zeroize();
-        secret.zeroize();
-
-        inst
+            api_key: key_secret,
+            api_secret: secret_secret,
+        }
     }
 
     fn symbol(pair: TradingPair) -> Result<String> {
@@ -352,6 +357,11 @@ impl ExchangeConnector for BinanceClient {
     }
 
     async fn cancel_order(&self, pair: TradingPair, order_id: &str) -> Result<()> {
+        // SEC: validate order_id is numeric only to prevent parameter injection
+        if !order_id.chars().all(|c| c.is_ascii_digit()) {
+            anyhow::bail!("Invalid order ID format");
+        }
+
         let symbol = Self::symbol(pair)?;
         let timestamp = Utc::now().timestamp_millis();
         let query = format!(

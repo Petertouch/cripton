@@ -62,6 +62,9 @@ impl ExecutionEngine {
 
     /// Execute a batch of signals (e.g. 3 legs of a triangle).
     /// For triangular arb, all legs must succeed or we abort.
+    ///
+    /// SEC: Mutex is NOT held across network calls to prevent deadlock.
+    /// Order state is updated in short critical sections before/after each call.
     pub async fn execute_signals(
         &self,
         signals: &[Signal],
@@ -76,19 +79,13 @@ impl ExecutionEngine {
         let mut trades = Vec::new();
 
         for (i, signal) in signals.iter().enumerate() {
-            // SEC: reject zero-quantity legs — don't silently skip
-            if signal.quantity.is_zero() {
-                if i > 0 {
-                    warn!("Leg {} has zero quantity — aborting remaining legs to prevent imbalance", i + 1);
+            // SEC: reject zero or negative quantity
+            if signal.quantity <= Decimal::ZERO {
+                if i == 0 {
+                    warn!("Leg 1 has invalid quantity — skipping entire batch");
                 } else {
-                    warn!("Leg 1 has zero quantity — skipping entire batch");
+                    warn!("Leg {} has invalid quantity — aborting to prevent imbalance", i + 1);
                 }
-                break;
-            }
-
-            // SEC: reject negative quantities
-            if signal.quantity < Decimal::ZERO {
-                error!("Leg {} has negative quantity — aborting", i + 1);
                 break;
             }
 
@@ -106,12 +103,14 @@ impl ExecutionEngine {
                 }
             };
 
-            // SEC: hold lock for entire create → submit → update cycle (atomic)
-            let mut mgr = self.order_manager.lock().await;
-            let order = mgr.create_order(signal);
-            let local_id = order.local_id.clone();
+            // SEC: short critical section — create order and release lock BEFORE network call
+            let local_id = {
+                let mut mgr = self.order_manager.lock().await;
+                let order = mgr.create_order(signal);
+                order.local_id
+            }; // lock released here
 
-            // Place order on exchange (lock still held to prevent TOCTOU)
+            // Network call WITHOUT holding the mutex
             let result = if self.config.use_limit_orders {
                 if let Some(price) = signal.price {
                     let limit_price = slippage::apply_slippage(
@@ -133,12 +132,15 @@ impl ExecutionEngine {
                     .await
             };
 
+            // SEC: short critical section — update order state after network call
             match result {
                 Ok(exchange_order_id) => {
                     info!("  Order placed: exchange_id={}", exchange_order_id);
-                    mgr.set_exchange_id(&local_id, &exchange_order_id);
-                    mgr.update_status(&local_id, OrderStatus::Filled);
-                    drop(mgr); // release lock before building trade
+                    {
+                        let mut mgr = self.order_manager.lock().await;
+                        mgr.set_exchange_id(&local_id, &exchange_order_id);
+                        mgr.update_status(&local_id, OrderStatus::Filled);
+                    } // lock released
 
                     trades.push(Trade {
                         id: uuid::Uuid::new_v4().to_string(),
@@ -155,9 +157,10 @@ impl ExecutionEngine {
                 }
                 Err(e) => {
                     error!("  Order FAILED: {}", e);
-                    mgr.update_status(&local_id, OrderStatus::Rejected);
-                    drop(mgr);
-
+                    {
+                        let mut mgr = self.order_manager.lock().await;
+                        mgr.update_status(&local_id, OrderStatus::Rejected);
+                    }
                     warn!("  Aborting remaining legs due to failure");
                     break;
                 }

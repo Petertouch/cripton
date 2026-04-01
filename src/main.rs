@@ -155,18 +155,30 @@ async fn main() -> Result<()> {
             Ok(trades) => {
                 trades_executed = trades_executed.saturating_add(trades.len() as u64);
 
-                // Record trades in storage
-                if let Some(ref store) = storage {
-                    if let Err(_) = store.insert_trades(&trades).await {
-                        error!("Failed to persist trades");
-                    }
-                }
-
+                // SEC: track trade value for exposure release
+                let trade_exposure: rust_decimal::Decimal = trades
+                    .iter()
+                    .map(|t| t.quantity * t.price)
+                    .sum();
                 let total_fees: rust_decimal::Decimal = trades.iter().map(|t| t.fee).sum();
                 let pnl = -total_fees;
 
+                // Record trades in storage — retry once on failure
+                if let Some(ref store) = storage {
+                    if let Err(_) = store.insert_trades(&trades).await {
+                        warn!("Trade persistence failed, retrying...");
+                        if let Err(_) = store.insert_trades(&trades).await {
+                            // SEC: if persistence fails twice, halt trading to prevent
+                            // unrecorded trades accumulating
+                            error!("Trade persistence failed twice — halting to prevent unrecorded trades");
+                            break;
+                        }
+                    }
+                }
+
+                // SEC: record P&L and release exposure atomically
                 let mut rm = risk_manager.lock().await;
-                rm.record_trade_pnl(pnl);
+                rm.record_trade_result(pnl, trade_exposure);
 
                 info!("Executed {} trades | total: {}", trades.len(), trades_executed);
             }

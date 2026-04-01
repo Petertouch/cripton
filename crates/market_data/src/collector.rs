@@ -41,7 +41,7 @@ impl Collector {
             }
         }
 
-        // Also fetch initial snapshots via REST
+        // Fetch initial snapshots via REST
         for exchange in &self.exchanges {
             for pair in &self.pairs {
                 let exchange = exchange.clone();
@@ -50,16 +50,16 @@ impl Collector {
                 tokio::spawn(async move {
                     match exchange.fetch_orderbook(pair).await {
                         Ok(book) => {
-                            cache.write().await.update(book);
-                            info!("Initial snapshot loaded: {} {}", exchange.exchange(), pair);
+                            // SEC: validate before caching
+                            if book.is_valid() {
+                                cache.write().await.update(book);
+                                info!("Initial snapshot loaded: {} {}", exchange.exchange(), pair);
+                            } else {
+                                warn!("Rejected invalid initial snapshot: {} {}", exchange.exchange(), pair);
+                            }
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to fetch initial {} {}: {}",
-                                exchange.exchange(),
-                                pair,
-                                e
-                            );
+                            warn!("Failed to fetch initial {} {}: {}", exchange.exchange(), pair, e);
                         }
                     }
                 });
@@ -72,24 +72,29 @@ impl Collector {
             while let Some(event) = event_rx.recv().await {
                 match event {
                     MarketEvent::OrderBookUpdate(book) => {
-                        cache.write().await.update(book);
+                        // SEC: validate order book before accepting it
+                        if !book.is_valid() {
+                            warn!("Rejected invalid order book update: {} {}", book.exchange, book.pair);
+                            continue;
+                        }
 
-                        // Build and emit new state
-                        let cache_read = cache.read().await;
-                        let books = cache_read.all().into_iter().cloned().collect();
-                        let state = Normalizer::build_state(books, vec![]);
+                        // SEC: minimize write lock duration — update cache, clone data,
+                        // then release lock BEFORE sending state downstream
+                        let state = {
+                            let mut cache_w = cache.write().await;
+                            cache_w.update(book);
+                            let books = cache_w.all().into_iter().cloned().collect();
+                            Normalizer::build_state(books, vec![])
+                        }; // write lock released here
 
                         if state_tx.send(state).is_err() {
                             warn!("State receiver dropped, stopping collector");
                             break;
                         }
                     }
-                    MarketEvent::TickerUpdate(_ticker) => {
-                        // TODO: add ticker cache
-                    }
+                    MarketEvent::TickerUpdate(_ticker) => {}
                     MarketEvent::ConnectionLost(exchange) => {
                         warn!("Lost connection to {}", exchange);
-                        // TODO: implement reconnection logic
                     }
                     MarketEvent::ConnectionRestored(exchange) => {
                         info!("Reconnected to {}", exchange);
