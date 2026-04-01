@@ -54,7 +54,7 @@ pub enum TradingPair {
     UsdtUsdc,
     UsdtEurc,
     EurcUsdc,
-    UsdtCop,    // via Bitso
+    UsdtCop, // via Bitso
     UsdcCop,
     EurUsdt,
     EurUsdc,

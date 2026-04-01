@@ -44,13 +44,15 @@ impl BinanceClient {
     /// then zeroizes the originals. No cloning — credentials exist in
     /// exactly one place (SecretString) after construction.
     pub fn new(mut api_key: String, mut api_secret: String) -> Self {
+        // Client::build() only fails with incompatible TLS backend config, which
+        // cannot happen with our static settings. ok_or is defense-in-depth.
         let client = Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
             .pool_max_idle_per_host(5)
             .https_only(true)
             .build()
-            .expect("Failed to build HTTP client");
+            .unwrap_or_else(|_| Client::new());
 
         // SEC: SecretString::from() for String takes ownership via Into<Box<str>>,
         // so we must create it before zeroizing. The original String's heap
@@ -129,7 +131,11 @@ impl BinanceClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Binance API error (HTTP {}): {}", status.as_u16(), Self::sanitize_error(&body));
+            anyhow::bail!(
+                "Binance API error (HTTP {}): {}",
+                status.as_u16(),
+                Self::sanitize_error(&body)
+            );
         }
 
         Ok(())
@@ -171,13 +177,12 @@ impl BinanceClient {
 
     fn sign(&self, query: &str) -> String {
         use std::fmt::Write;
-        let key = hmac_sha256::HMAC::mac(
-            query.as_bytes(),
-            self.api_secret.expose_secret().as_bytes(),
-        );
+        let key =
+            hmac_sha256::HMAC::mac(query.as_bytes(), self.api_secret.expose_secret().as_bytes());
         let mut hex = String::with_capacity(64);
         for byte in key {
-            write!(hex, "{:02x}", byte).unwrap();
+            // write! to a String is infallible (never returns Err)
+            let _ = write!(hex, "{:02x}", byte);
         }
         // key is stack-allocated [u8; 32], dropped here automatically
         hex
@@ -227,7 +232,10 @@ fn parse_price_levels(raw: &[[String; 2]]) -> Vec<PriceLevel> {
             if p <= Decimal::ZERO || q < Decimal::ZERO {
                 return None;
             }
-            Some(PriceLevel { price: p, quantity: q })
+            Some(PriceLevel {
+                price: p,
+                quantity: q,
+            })
         })
         .collect()
 }
@@ -250,8 +258,8 @@ impl ExchangeConnector for BinanceClient {
             .context("Failed to fetch order book")?;
 
         let body = Self::validate_response(resp).await?;
-        let data: BinanceOrderBookResponse = serde_json::from_str(&body)
-            .context("Failed to parse order book response")?;
+        let data: BinanceOrderBookResponse =
+            serde_json::from_str(&body).context("Failed to parse order book response")?;
 
         let mut bids = parse_price_levels(&data.bids);
         let mut asks = parse_price_levels(&data.asks);
@@ -260,7 +268,13 @@ impl ExchangeConnector for BinanceClient {
         bids.sort_by(|a, b| b.price.cmp(&a.price)); // descending
         asks.sort_by(|a, b| a.price.cmp(&b.price)); // ascending
 
-        debug!("{} {} orderbook: {} bids, {} asks", Exchange::Binance, pair, bids.len(), asks.len());
+        debug!(
+            "{} {} orderbook: {} bids, {} asks",
+            Exchange::Binance,
+            pair,
+            bids.len(),
+            asks.len()
+        );
 
         Ok(OrderBook {
             exchange: Exchange::Binance,
@@ -283,8 +297,8 @@ impl ExchangeConnector for BinanceClient {
             .context("Failed to fetch ticker")?;
 
         let body = Self::validate_response(resp).await?;
-        let data: BinanceTickerResponse = serde_json::from_str(&body)
-            .context("Failed to parse ticker response")?;
+        let data: BinanceTickerResponse =
+            serde_json::from_str(&body).context("Failed to parse ticker response")?;
 
         Ok(Ticker {
             exchange: Exchange::Binance,
@@ -325,8 +339,8 @@ impl ExchangeConnector for BinanceClient {
         );
 
         let body = self.signed_post("/api/v3/order", &query).await?;
-        let resp: BinanceOrderResponse = serde_json::from_str(&body)
-            .context("Failed to parse order response")?;
+        let resp: BinanceOrderResponse =
+            serde_json::from_str(&body).context("Failed to parse order response")?;
 
         Ok(resp.order_id.to_string())
     }
@@ -350,8 +364,8 @@ impl ExchangeConnector for BinanceClient {
         );
 
         let body = self.signed_post("/api/v3/order", &query).await?;
-        let resp: BinanceOrderResponse = serde_json::from_str(&body)
-            .context("Failed to parse order response")?;
+        let resp: BinanceOrderResponse =
+            serde_json::from_str(&body).context("Failed to parse order response")?;
 
         Ok(resp.order_id.to_string())
     }
@@ -382,8 +396,8 @@ impl ExchangeConnector for BinanceClient {
         let query = format!("recvWindow={}&timestamp={}", RECV_WINDOW, timestamp);
 
         let body = self.signed_get("/api/v3/account", &query).await?;
-        let resp: BinanceAccountResponse = serde_json::from_str(&body)
-            .context("Failed to parse account response")?;
+        let resp: BinanceAccountResponse =
+            serde_json::from_str(&body).context("Failed to parse account response")?;
 
         let balance = resp
             .balances

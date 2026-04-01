@@ -24,10 +24,7 @@ impl OrderBookCache {
     }
 
     pub fn get_all_for_pair(&self, pair: TradingPair) -> Vec<&OrderBook> {
-        self.books
-            .values()
-            .filter(|ob| ob.pair == pair)
-            .collect()
+        self.books.values().filter(|ob| ob.pair == pair).collect()
     }
 
     pub fn all(&self) -> Vec<&OrderBook> {

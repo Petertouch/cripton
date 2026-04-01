@@ -56,8 +56,18 @@ mod tests {
 
     #[test]
     fn test_within_slippage_buy() {
-        assert!(is_within_slippage(dec!(1.0), dec!(1.0004), Side::Buy, dec!(0.05)));
-        assert!(!is_within_slippage(dec!(1.0), dec!(1.001), Side::Buy, dec!(0.05)));
+        assert!(is_within_slippage(
+            dec!(1.0),
+            dec!(1.0004),
+            Side::Buy,
+            dec!(0.05)
+        ));
+        assert!(!is_within_slippage(
+            dec!(1.0),
+            dec!(1.001),
+            Side::Buy,
+            dec!(0.05)
+        ));
     }
 
     #[test]

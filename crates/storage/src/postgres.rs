@@ -1,6 +1,6 @@
 use anyhow::Result;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 
 use cripton_core::Trade;
@@ -145,7 +145,9 @@ impl PgStorage {
     }
 
     /// Get today's P&L summary
-    pub async fn today_summary(&self) -> Result<(i64, rust_decimal::Decimal, rust_decimal::Decimal)> {
+    pub async fn today_summary(
+        &self,
+    ) -> Result<(i64, rust_decimal::Decimal, rust_decimal::Decimal)> {
         let row: (i64, rust_decimal::Decimal, rust_decimal::Decimal) = sqlx::query_as(
             r#"
             SELECT

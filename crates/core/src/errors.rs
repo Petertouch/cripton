@@ -5,10 +5,7 @@ use crate::enums::Exchange;
 #[derive(Error, Debug)]
 pub enum CriptonError {
     #[error("Exchange error ({exchange}): {message}")]
-    Exchange {
-        exchange: Exchange,
-        message: String,
-    },
+    Exchange { exchange: Exchange, message: String },
 
     #[error("WebSocket connection failed: {0}")]
     WebSocket(String),
@@ -30,10 +27,7 @@ pub enum CriptonError {
     Config(String),
 
     #[error("Pair not supported on {exchange}: {pair}")]
-    UnsupportedPair {
-        exchange: Exchange,
-        pair: String,
-    },
+    UnsupportedPair { exchange: Exchange, pair: String },
 
     #[error("HTTP request failed")]
     Http(#[from] reqwest::Error),

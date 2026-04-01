@@ -69,9 +69,9 @@ async fn main() -> Result<()> {
 
     // --- Strategy ---
     let strategy = TriangularArbitrage::new(
-        dec!(0.03),   // min 0.03% profit to trigger
-        dec!(0.001),  // 0.1% fee per trade
-        dec!(100),    // trade $100 per cycle
+        dec!(0.03),  // min 0.03% profit to trigger
+        dec!(0.001), // 0.1% fee per trade
+        dec!(100),   // trade $100 per cycle
         Exchange::Binance,
     );
 
@@ -114,9 +114,11 @@ async fn main() -> Result<()> {
         update_count = update_count.saturating_add(1);
 
         // Log market status periodically
-        if update_count % 500 == 0 {
-            info!("--- Status: {} updates | {} opportunities | {} trades ---",
-                update_count, opportunities_found, trades_executed);
+        if update_count.is_multiple_of(500) {
+            info!(
+                "--- Status: {} updates | {} opportunities | {} trades ---",
+                update_count, opportunities_found, trades_executed
+            );
 
             // Log circuit breaker status
             let rm = risk_manager.lock().await;
@@ -147,7 +149,10 @@ async fn main() -> Result<()> {
 
         // --- 3. Execute (only if not read-only) ---
         if read_only {
-            info!("READ-ONLY: Would execute {} signals", approved_signals.len());
+            info!(
+                "READ-ONLY: Would execute {} signals",
+                approved_signals.len()
+            );
             continue;
         }
 
@@ -156,23 +161,21 @@ async fn main() -> Result<()> {
                 trades_executed = trades_executed.saturating_add(trades.len() as u64);
 
                 // SEC: track trade value for exposure release
-                let trade_exposure: rust_decimal::Decimal = trades
-                    .iter()
-                    .map(|t| t.quantity * t.price)
-                    .sum();
+                let trade_exposure: rust_decimal::Decimal =
+                    trades.iter().map(|t| t.quantity * t.price).sum();
                 let total_fees: rust_decimal::Decimal = trades.iter().map(|t| t.fee).sum();
                 let pnl = -total_fees;
 
                 // Record trades in storage — retry once on failure
-                if let Some(ref store) = storage {
-                    if let Err(_) = store.insert_trades(&trades).await {
-                        warn!("Trade persistence failed, retrying...");
-                        if let Err(_) = store.insert_trades(&trades).await {
-                            // SEC: if persistence fails twice, halt trading to prevent
-                            // unrecorded trades accumulating
-                            error!("Trade persistence failed twice — halting to prevent unrecorded trades");
-                            break;
-                        }
+                if let Some(ref store) = storage
+                    && store.insert_trades(&trades).await.is_err()
+                {
+                    warn!("Trade persistence failed, retrying...");
+                    if store.insert_trades(&trades).await.is_err() {
+                        error!(
+                            "Trade persistence failed twice — halting to prevent unrecorded trades"
+                        );
+                        break;
                     }
                 }
 
@@ -180,7 +183,11 @@ async fn main() -> Result<()> {
                 let mut rm = risk_manager.lock().await;
                 rm.record_trade_result(pnl, trade_exposure);
 
-                info!("Executed {} trades | total: {}", trades.len(), trades_executed);
+                info!(
+                    "Executed {} trades | total: {}",
+                    trades.len(),
+                    trades_executed
+                );
             }
             Err(_) => {
                 error!("Execution failed");

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{info, warn};
 
 use cripton_core::{MarketState, TradingPair};
@@ -36,7 +36,10 @@ impl Collector {
         // Subscribe to each exchange's WebSocket
         for exchange in &self.exchanges {
             info!("Subscribing to {} order books", exchange.exchange());
-            if let Err(e) = exchange.subscribe_orderbook(&self.pairs, event_tx.clone()).await {
+            if let Err(e) = exchange
+                .subscribe_orderbook(&self.pairs, event_tx.clone())
+                .await
+            {
                 warn!("Failed to subscribe to {}: {}", exchange.exchange(), e);
             }
         }
@@ -55,11 +58,20 @@ impl Collector {
                                 cache.write().await.update(book);
                                 info!("Initial snapshot loaded: {} {}", exchange.exchange(), pair);
                             } else {
-                                warn!("Rejected invalid initial snapshot: {} {}", exchange.exchange(), pair);
+                                warn!(
+                                    "Rejected invalid initial snapshot: {} {}",
+                                    exchange.exchange(),
+                                    pair
+                                );
                             }
                         }
                         Err(e) => {
-                            warn!("Failed to fetch initial {} {}: {}", exchange.exchange(), pair, e);
+                            warn!(
+                                "Failed to fetch initial {} {}: {}",
+                                exchange.exchange(),
+                                pair,
+                                e
+                            );
                         }
                     }
                 });
@@ -74,7 +86,10 @@ impl Collector {
                     MarketEvent::OrderBookUpdate(book) => {
                         // SEC: validate order book before accepting it
                         if !book.is_valid() {
-                            warn!("Rejected invalid order book update: {} {}", book.exchange, book.pair);
+                            warn!(
+                                "Rejected invalid order book update: {} {}",
+                                book.exchange, book.pair
+                            );
                             continue;
                         }
 

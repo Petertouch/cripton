@@ -41,10 +41,7 @@ pub struct ExecutionEngine {
 }
 
 impl ExecutionEngine {
-    pub fn new(
-        exchanges: Vec<Arc<dyn ExchangeConnector>>,
-        config: ExecutionConfig,
-    ) -> Self {
+    pub fn new(exchanges: Vec<Arc<dyn ExchangeConnector>>, config: ExecutionConfig) -> Self {
         Self {
             exchanges,
             order_manager: Arc::new(Mutex::new(OrderManager::new())),
@@ -56,7 +53,10 @@ impl ExecutionEngine {
         self.order_manager.clone()
     }
 
-    fn get_exchange(&self, exchange: cripton_core::Exchange) -> Option<&Arc<dyn ExchangeConnector>> {
+    fn get_exchange(
+        &self,
+        exchange: cripton_core::Exchange,
+    ) -> Option<&Arc<dyn ExchangeConnector>> {
         self.exchanges.iter().find(|e| e.exchange() == exchange)
     }
 
@@ -84,15 +84,22 @@ impl ExecutionEngine {
                 if i == 0 {
                     warn!("Leg 1 has invalid quantity — skipping entire batch");
                 } else {
-                    warn!("Leg {} has invalid quantity — aborting to prevent imbalance", i + 1);
+                    warn!(
+                        "Leg {} has invalid quantity — aborting to prevent imbalance",
+                        i + 1
+                    );
                 }
                 break;
             }
 
             info!(
                 "  Leg {}: {} {} {} @ {:?} qty={}",
-                i + 1, signal.side, signal.pair, signal.exchange,
-                signal.price, signal.quantity
+                i + 1,
+                signal.side,
+                signal.pair,
+                signal.exchange,
+                signal.price,
+                signal.quantity
             );
 
             let exchange = match self.get_exchange(signal.exchange) {
@@ -113,11 +120,8 @@ impl ExecutionEngine {
             // Network call WITHOUT holding the mutex
             let result = if self.config.use_limit_orders {
                 if let Some(price) = signal.price {
-                    let limit_price = slippage::apply_slippage(
-                        price,
-                        signal.side,
-                        self.config.max_slippage_pct,
-                    );
+                    let limit_price =
+                        slippage::apply_slippage(price, signal.side, self.config.max_slippage_pct);
                     exchange
                         .place_limit_order(signal.pair, signal.side, limit_price, signal.quantity)
                         .await

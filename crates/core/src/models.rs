@@ -16,8 +16,8 @@ pub struct PriceLevel {
 pub struct OrderBook {
     pub exchange: Exchange,
     pub pair: TradingPair,
-    pub bids: Vec<PriceLevel>,  // sorted descending by price (best bid first)
-    pub asks: Vec<PriceLevel>,  // sorted ascending by price (best ask first)
+    pub bids: Vec<PriceLevel>, // sorted descending by price (best bid first)
+    pub asks: Vec<PriceLevel>, // sorted ascending by price (best ask first)
     pub timestamp: DateTime<Utc>,
 }
 
@@ -83,10 +83,10 @@ impl OrderBook {
         }
 
         // Not crossed
-        if let (Some(bid), Some(ask)) = (self.best_bid(), self.best_ask()) {
-            if bid.price >= ask.price {
-                return false;
-            }
+        if let (Some(bid), Some(ask)) = (self.best_bid(), self.best_ask())
+            && bid.price >= ask.price
+        {
+            return false;
         }
 
         true
@@ -116,7 +116,7 @@ pub struct Order {
     pub pair: TradingPair,
     pub side: Side,
     pub order_type: OrderType,
-    pub price: Option<Decimal>,  // None for market orders
+    pub price: Option<Decimal>, // None for market orders
     pub quantity: Decimal,
     pub status: OrderStatus,
     pub created_at: DateTime<Utc>,

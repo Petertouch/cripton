@@ -58,18 +58,18 @@ impl TriangularArbitrage {
             // Leg 3: Sell USDC for USDT on USDT/USDC pair (buy USDT)
             Triangle {
                 legs: [
-                    (TradingPair::UsdtEurc, Side::Buy),   // USDT → EURC
-                    (TradingPair::EurcUsdc, Side::Sell),   // EURC → USDC
-                    (TradingPair::UsdtUsdc, Side::Buy),    // USDC → USDT
+                    (TradingPair::UsdtEurc, Side::Buy),  // USDT → EURC
+                    (TradingPair::EurcUsdc, Side::Sell), // EURC → USDC
+                    (TradingPair::UsdtUsdc, Side::Buy),  // USDC → USDT
                 ],
                 name: "USDT→EURC→USDC→USDT",
             },
             // Reverse: USDT → USDC → EURC → USDT
             Triangle {
                 legs: [
-                    (TradingPair::UsdtUsdc, Side::Sell),   // USDT → USDC
-                    (TradingPair::EurcUsdc, Side::Buy),    // USDC → EURC
-                    (TradingPair::UsdtEurc, Side::Sell),   // EURC → USDT
+                    (TradingPair::UsdtUsdc, Side::Sell), // USDT → USDC
+                    (TradingPair::EurcUsdc, Side::Buy),  // USDC → EURC
+                    (TradingPair::UsdtEurc, Side::Sell), // EURC → USDT
                 ],
                 name: "USDT→USDC→EURC→USDT",
             },
@@ -193,16 +193,12 @@ impl Strategy for TriangularArbitrage {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use cripton_core::{OrderBook, PriceLevel};
 
-    fn make_book(
-        exchange: Exchange,
-        pair: TradingPair,
-        bid: &str,
-        ask: &str,
-    ) -> OrderBook {
+    fn make_book(exchange: Exchange, pair: TradingPair, bid: &str, ask: &str) -> OrderBook {
         OrderBook {
             exchange,
             pair,
@@ -238,7 +234,10 @@ mod tests {
         };
 
         let signals = strategy.evaluate(&state).await;
-        assert!(signals.is_empty(), "Should not find opportunity with equal prices and fees");
+        assert!(
+            signals.is_empty(),
+            "Should not find opportunity with equal prices and fees"
+        );
     }
 
     #[tokio::test]
@@ -264,7 +263,11 @@ mod tests {
         // May or may not trigger depending on exact math — the test validates the logic runs
         // If it does trigger, we expect 3 signals (one per leg)
         if !signals.is_empty() {
-            assert_eq!(signals.len(), 3, "Triangle should produce exactly 3 signals");
+            assert_eq!(
+                signals.len(),
+                3,
+                "Triangle should produce exactly 3 signals"
+            );
         }
     }
 }

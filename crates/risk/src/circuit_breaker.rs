@@ -72,17 +72,13 @@ impl CircuitBreaker {
             return true;
         };
 
-        // SEC: check cooldown with monotonic-safe comparison
-        // If clock goes backward, now < tripped_at, we stay tripped (safe default)
+        // SEC: monotonic-safe comparison — if clock goes backward, stay tripped (fail-safe)
         let now = Utc::now();
-        if now > tripped_at {
-            if now - tripped_at >= self.cooldown {
-                warn!("Circuit breaker cooldown expired, resuming trading");
-                self.reset();
-                return true;
-            }
+        if now > tripped_at && now - tripped_at >= self.cooldown {
+            warn!("Circuit breaker cooldown expired, resuming trading");
+            self.reset();
+            return true;
         }
-        // If now <= tripped_at (clock skew), remain tripped (fail-safe)
 
         false
     }
@@ -121,7 +117,10 @@ impl CircuitBreaker {
     }
 
     fn trip(&mut self) {
-        error!("CIRCUIT BREAKER TRIPPED — halting all trading for {} minutes", self.cooldown.num_minutes());
+        error!(
+            "CIRCUIT BREAKER TRIPPED — halting all trading for {} minutes",
+            self.cooldown.num_minutes()
+        );
         self.tripped_at = Some(Utc::now());
     }
 

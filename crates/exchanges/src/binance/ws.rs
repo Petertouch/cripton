@@ -37,7 +37,10 @@ fn parse_levels(raw: &[[String; 2]]) -> Vec<PriceLevel> {
                 warn!("WS: rejected invalid price level: price={}, qty={}", p, q);
                 return None;
             }
-            Some(PriceLevel { price: p, quantity: q })
+            Some(PriceLevel {
+                price: p,
+                quantity: q,
+            })
         })
         .collect()
 }
@@ -65,17 +68,22 @@ fn validate_orderbook(book: &OrderBook) -> bool {
     let asks_sorted = book.asks.windows(2).all(|w| w[0].price <= w[1].price);
 
     if !bids_sorted || !asks_sorted {
-        warn!("WS: order book not properly sorted for {} {}", book.exchange, book.pair);
+        warn!(
+            "WS: order book not properly sorted for {} {}",
+            book.exchange, book.pair
+        );
         return false;
     }
 
     // Best bid must be less than best ask (no crossed book)
-    if let (Some(bid), Some(ask)) = (book.best_bid(), book.best_ask()) {
-        if bid.price >= ask.price {
-            warn!("WS: crossed order book for {} {}: bid={} >= ask={}",
-                book.exchange, book.pair, bid.price, ask.price);
-            return false;
-        }
+    if let (Some(bid), Some(ask)) = (book.best_bid(), book.best_ask())
+        && bid.price >= ask.price
+    {
+        warn!(
+            "WS: crossed order book for {} {}: bid={} >= ask={}",
+            book.exchange, book.pair, bid.price, ask.price
+        );
+        return false;
     }
 
     true
@@ -110,7 +118,10 @@ pub async fn subscribe_orderbook(
 
     let (_write, mut read) = ws_stream.split();
 
-    info!("Connected to Binance WebSocket, subscribed to {} pairs", pairs.len());
+    info!(
+        "Connected to Binance WebSocket, subscribed to {} pairs",
+        pairs.len()
+    );
 
     // Clone what we need for the reconnection loop
     let url_for_reconnect = url.clone();
@@ -131,7 +142,10 @@ pub async fn subscribe_orderbook(
             // Attempt reconnection with exponential backoff
             reconnect_attempts = reconnect_attempts.saturating_add(1);
             if reconnect_attempts > MAX_RECONNECT_ATTEMPTS {
-                error!("WS: exceeded {} reconnection attempts, giving up", MAX_RECONNECT_ATTEMPTS);
+                error!(
+                    "WS: exceeded {} reconnection attempts, giving up",
+                    MAX_RECONNECT_ATTEMPTS
+                );
                 let _ = tx_clone.send(MarketEvent::ConnectionLost(Exchange::Binance));
                 break;
             }
@@ -140,8 +154,10 @@ pub async fn subscribe_orderbook(
                 INITIAL_BACKOFF_MS * 2u64.saturating_pow(reconnect_attempts - 1),
                 MAX_BACKOFF_MS,
             );
-            warn!("WS: reconnecting in {}ms (attempt {}/{})",
-                backoff, reconnect_attempts, MAX_RECONNECT_ATTEMPTS);
+            warn!(
+                "WS: reconnecting in {}ms (attempt {}/{})",
+                backoff, reconnect_attempts, MAX_RECONNECT_ATTEMPTS
+            );
 
             tokio::time::sleep(Duration::from_millis(backoff)).await;
 
@@ -163,6 +179,28 @@ pub async fn subscribe_orderbook(
     Ok(())
 }
 
+/// Parse a single WebSocket text message into an OrderBook
+fn parse_ws_message(text: &str) -> Option<OrderBook> {
+    let wrapper: serde_json::Value = serde_json::from_str(text).ok()?;
+    let data = wrapper.get("data")?;
+    let update: WsDepthUpdate = serde_json::from_value(data.clone()).ok()?;
+    let pair = symbol_to_pair(&update.symbol)?;
+
+    let mut bids = parse_levels(&update.bids);
+    let mut asks = parse_levels(&update.asks);
+
+    bids.sort_by(|a, b| b.price.cmp(&a.price));
+    asks.sort_by(|a, b| a.price.cmp(&b.price));
+
+    Some(OrderBook {
+        exchange: Exchange::Binance,
+        pair,
+        bids,
+        asks,
+        timestamp: Utc::now(),
+    })
+}
+
 /// Process incoming WebSocket messages. Returns true if disconnected (should reconnect),
 /// false if the channel was closed (should exit).
 async fn process_messages(
@@ -176,37 +214,16 @@ async fn process_messages(
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(&text.to_string()) {
-                    if let Some(data) = wrapper.get("data") {
-                        if let Ok(update) = serde_json::from_value::<WsDepthUpdate>(data.clone()) {
-                            if let Some(pair) = symbol_to_pair(&update.symbol) {
-                                let mut bids = parse_levels(&update.bids);
-                                let mut asks = parse_levels(&update.asks);
+                let Some(orderbook) = parse_ws_message(text.as_ref()) else {
+                    continue;
+                };
 
-                                // SEC: enforce sort order
-                                bids.sort_by(|a, b| b.price.cmp(&a.price));
-                                asks.sort_by(|a, b| a.price.cmp(&b.price));
+                if !validate_orderbook(&orderbook) {
+                    continue;
+                }
 
-                                let orderbook = OrderBook {
-                                    exchange: Exchange::Binance,
-                                    pair,
-                                    bids,
-                                    asks,
-                                    timestamp: Utc::now(),
-                                };
-
-                                // SEC: validate before sending
-                                if !validate_orderbook(&orderbook) {
-                                    continue;
-                                }
-
-                                if tx.send(MarketEvent::OrderBookUpdate(orderbook)).is_err() {
-                                    // Receiver dropped, exit without reconnecting
-                                    return false;
-                                }
-                            }
-                        }
-                    }
+                if tx.send(MarketEvent::OrderBookUpdate(orderbook)).is_err() {
+                    return false;
                 }
             }
             Ok(Message::Ping(_)) => {}

@@ -125,10 +125,10 @@ impl OrderManager {
         // Remove oldest half of completed orders
         let to_remove = completed.len() / 2;
         for (local_id, _) in completed.into_iter().take(to_remove) {
-            if let Some(order) = self.orders.remove(&local_id) {
-                if let Some(eid) = &order.exchange_id {
-                    self.exchange_to_local.remove(eid);
-                }
+            if let Some(order) = self.orders.remove(&local_id)
+                && let Some(eid) = &order.exchange_id
+            {
+                self.exchange_to_local.remove(eid);
             }
         }
     }
